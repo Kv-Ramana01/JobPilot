@@ -1,0 +1,338 @@
+// prisma/schema.prisma
+// JobPilot — full database schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── User & Profile ───────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile       Profile?
+  resumes       Resume[]
+  savedJobs     SavedJob[]
+  applications  Application[]
+  alerts        Alert[]
+  notifications Notification[]
+  aiHistory     AiHistory[]
+
+  @@index([clerkId])
+  @@index([email])
+}
+
+model Profile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fullName        String?
+  phone           String?
+  country         String?
+  city            String?
+  avatarUrl       String?
+  bio             String?  @db.Text
+
+  linkedinUrl     String?
+  githubUrl       String?
+  portfolioUrl    String?
+
+  skills          String[] // array of skill strings
+  experienceLevel ExperienceLevel @default(FRESHER)
+  yearsOfExp      Float?
+
+  preferredRoles    String[]
+  preferredCountries String[]
+  preferredWorkType  WorkType[]
+  openToRelocation  Boolean  @default(false)
+  openToSponsorship Boolean  @default(false)
+
+  defaultResumeId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Resume {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String   // e.g. "General Resume", "React-focused"
+  fileUrl     String   // uploadthing URL
+  fileKey     String   // uploadthing key (for deletion)
+  mimeType    String   @default("application/pdf")
+  sizeBytes   Int?
+
+  isDefault   Boolean  @default(false)
+  parsedText  String?  @db.Text // extracted text for AI processing
+
+  aiScores    AiHistory[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ─── Jobs ─────────────────────────────────────────────────────────
+
+model Job {
+  id           String   @id @default(cuid())
+  externalId   String?  // ID from source API
+  source       JobSource
+  sourceUrl    String   // link to apply
+
+  title        String
+  company      String
+  companyLogo  String?
+  companySize  String?
+  industry     String?
+
+  location     String?
+  city         String?
+  country      String?
+  workType     WorkType @default(ONSITE)
+  isRemote     Boolean  @default(false)
+
+  jobType      JobType  @default(FULL_TIME)
+  experienceLevel ExperienceLevel?
+  yearsRequired Float?
+
+  salaryMin    Int?
+  salaryMax    Int?
+  currency     String?  @default("USD")
+
+  description  String   @db.Text
+  requirements String?  @db.Text
+  skills       String[]
+  benefits     String[]
+
+  visaSponsorship Boolean @default(false)
+  deadline        DateTime?
+  postedAt        DateTime?
+
+  isActive     Boolean  @default(true)
+  viewCount    Int      @default(0)
+  applyCount   Int      @default(0)
+
+  savedBy      SavedJob[]
+  applications Application[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([externalId, source])
+  @@index([source])
+  @@index([isActive])
+  @@index([postedAt])
+  @@index([country])
+  @@index([workType])
+  @@index([jobType])
+}
+
+// ─── Saved Jobs ───────────────────────────────────────────────────
+
+model SavedJob {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId      String
+  job        Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  collection String   @default("general") // "dream", "remote", "internships", etc.
+  notes      String?  @db.Text
+
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, jobId])
+  @@index([userId])
+}
+
+// ─── Applications ─────────────────────────────────────────────────
+
+model Application {
+  id        String            @id @default(cuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId     String
+  job       Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  status    ApplicationStatus @default(APPLIED)
+  applyMode ApplyMode         @default(MANUAL)
+
+  resumeId  String?
+  coverLetter String?         @db.Text
+  notes     String?           @db.Text
+
+  appliedAt       DateTime?
+  interviewDate   DateTime?
+  oaDeadline      DateTime?
+  offerReceivedAt DateTime?
+  rejectedAt      DateTime?
+
+  // Timeline events stored as JSON array
+  timeline  Json?   @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, jobId])
+  @@index([userId])
+  @@index([status])
+}
+
+// ─── Alerts ───────────────────────────────────────────────────────
+
+model Alert {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name      String   // "Remote React jobs"
+  keywords  String[]
+  roles     String[]
+  countries String[]
+  workTypes WorkType[]
+  jobTypes  JobType[]
+  minSalary Int?
+  remote    Boolean  @default(false)
+
+  emailEnabled Boolean @default(true)
+  inAppEnabled Boolean @default(true)
+  frequency    AlertFrequency @default(DAILY)
+
+  lastSentAt DateTime?
+  isActive   Boolean  @default(true)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// ─── Notifications ────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      NotificationType
+  title     String
+  body      String   @db.Text
+  link      String?
+  isRead    Boolean  @default(false)
+  meta      Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+}
+
+// ─── AI History ───────────────────────────────────────────────────
+
+model AiHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resumeId  String?
+  resume    Resume?  @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+
+  type      AiTaskType
+  jobTitle  String?
+  company   String?
+  jobDesc   String?  @db.Text
+
+  inputTokens  Int?
+  outputTokens Int?
+
+  result    Json     // stores the full Gemini response (score, suggestions, etc.)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ─── Enums ────────────────────────────────────────────────────────
+
+enum ExperienceLevel {
+  FRESHER
+  JUNIOR
+  MID
+  SENIOR
+  LEAD
+  PRINCIPAL
+}
+
+enum WorkType {
+  REMOTE
+  HYBRID
+  ONSITE
+}
+
+enum JobType {
+  FULL_TIME
+  PART_TIME
+  INTERNSHIP
+  CONTRACT
+  FREELANCE
+}
+
+enum JobSource {
+  GREENHOUSE
+  LEVER
+  WORKABLE
+  REMOTIVE
+  ADZUNA
+  JSEARCH
+  MANUAL
+}
+
+enum ApplicationStatus {
+  SAVED
+  APPLIED
+  OA
+  INTERVIEW
+  OFFER
+  REJECTED
+  WITHDRAWN
+}
+
+enum ApplyMode {
+  MANUAL        // user applied themselves
+  DIRECT_LINK   // jobpilot opened apply page
+  AUTO_FILL     // playwright auto-filled form
+}
+
+enum AlertFrequency {
+  INSTANT
+  DAILY
+  WEEKLY
+}
+
+enum NotificationType {
+  NEW_JOBS
+  APPLICATION_UPDATE
+  INTERVIEW_REMINDER
+  ALERT_MATCH
+  SYSTEM
+}
+
+enum AiTaskType {
+  RESUME_SCORE
+  RESUME_REWRITE
+  COVER_LETTER
+  SKILLS_GAP
+  INTERVIEW_PREP
+}
