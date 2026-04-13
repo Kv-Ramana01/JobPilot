@@ -30,14 +30,28 @@ export async function GET(req: NextRequest) {
     const sp = Object.fromEntries(req.nextUrl.searchParams) as Record<string, unknown>;
 
     // Parse array params from comma-separated strings
-    if (typeof sp.jobType === "string") {
-      sp.jobType = sp.jobType.split(",");
+    if (typeof sp.jobType === "string" && sp.jobType) {
+      sp.jobType = sp.jobType.split(",").filter(Boolean);
+    } else if (!sp.jobType) {
+      delete sp.jobType;
     }
-    if (typeof sp.workType === "string") {
-      sp.workType = sp.workType.split(",");
+
+    if (typeof sp.workType === "string" && sp.workType) {
+      sp.workType = sp.workType.split(",").filter(Boolean);
+    } else if (!sp.workType) {
+      delete sp.workType;
     }
-    if (typeof sp.countries === "string") {
-      sp.countries = sp.countries.split(",");
+
+    if (typeof sp.countries === "string" && sp.countries) {
+      sp.countries = sp.countries.split(",").filter(Boolean);
+    } else if (!sp.countries) {
+      delete sp.countries;
+    }
+
+    if (typeof sp.experienceLevel === "string" && sp.experienceLevel) {
+      sp.experienceLevel = sp.experienceLevel.split(",").filter(Boolean);
+    } else if (!sp.experienceLevel) {
+      delete sp.experienceLevel;
     }
 
     const filters = filtersSchema.parse(sp);
@@ -47,12 +61,13 @@ export async function GET(req: NextRequest) {
       isActive: true,
     };
 
-    if (filters.search) {
+    if (filters.search && filters.search.trim()) {
+      const q = filters.search.trim();
       where.OR = [
-        { title: { contains: filters.search, mode: "insensitive" } },
-        { company: { contains: filters.search, mode: "insensitive" } },
-        { description: { contains: filters.search, mode: "insensitive" } },
-        { skills: { has: filters.search } },
+        { title: { contains: q, mode: "insensitive" } },
+        { company: { contains: q, mode: "insensitive" } },
+        { description: { contains: q, mode: "insensitive" } },
+        { skills: { has: q } },
       ];
     }
 
@@ -95,14 +110,10 @@ export async function GET(req: NextRequest) {
     }
 
     const skip = (filters.page - 1) * filters.pageSize;
+    const take = Math.min(filters.pageSize, 100); // cap at 100
 
     const [jobs, total] = await Promise.all([
-      db.job.findMany({
-        where,
-        orderBy,
-        skip,
-        take: filters.pageSize,
-      }),
+      db.job.findMany({ where, orderBy, skip, take }),
       db.job.count({ where }),
     ]);
 
@@ -148,7 +159,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    console.error("[GET /api/jobs]", err);
+    console.error("[GET /api/jobs]", err instanceof Error ? err.message : err);
     if (err instanceof z.ZodError) {
       return NextResponse.json(
         { success: false, error: "Invalid filters", details: err.flatten() },
@@ -166,13 +177,20 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   // Protect with a secret header for cron use
-  const cronSecret = req.headers.get("x-cron-secret");
-  if (cronSecret !== process.env.CRON_SECRET && process.env.NODE_ENV === "production") {
+  const cronSecret = req.headers.get("x-cron-secret") ?? req.headers.get("authorization")?.replace("Bearer ", "");
+  const expectedSecret = process.env.CRON_SECRET;
+
+  if (expectedSecret && cronSecret !== expectedSecret && process.env.NODE_ENV === "production") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const startTime = Date.now();
+  console.log("[POST /api/jobs] Starting sync...");
+
   try {
     const rawJobs = await aggregateJobs();
+    console.log(`[POST /api/jobs] Got ${rawJobs.length} raw jobs`);
+
     let upserted = 0;
     let errors = 0;
 
@@ -183,6 +201,11 @@ export async function POST(req: NextRequest) {
       await Promise.allSettled(
         batch.map(async (job) => {
           try {
+            if (!job.externalId || !job.source || !job.title) {
+              errors++;
+              return;
+            }
+
             await db.job.upsert({
               where: {
                 externalId_source: {
@@ -196,52 +219,59 @@ export async function POST(req: NextRequest) {
                 sourceUrl: job.sourceUrl,
                 title: job.title,
                 company: job.company,
-                companyLogo: job.companyLogo,
-                location: job.location,
-                country: job.country,
-                isRemote: job.isRemote,
+                companyLogo: job.companyLogo ?? null,
+                location: job.location ?? null,
+                country: job.country ?? null,
+                isRemote: job.isRemote ?? false,
                 workType: job.workType,
                 jobType: job.jobType,
-                description: job.description,
-                requirements: job.requirements,
-                skills: job.skills,
-                salaryMin: job.salaryMin,
-                salaryMax: job.salaryMax,
+                description: job.description || "<p>No description available.</p>",
+                requirements: job.requirements ?? null,
+                skills: job.skills ?? [],
+                salaryMin: job.salaryMin ?? null,
+                salaryMax: job.salaryMax ?? null,
                 currency: job.currency ?? "USD",
-                postedAt: job.postedAt,
-                deadline: job.deadline,
+                postedAt: job.postedAt ?? new Date(),
+                deadline: job.deadline ?? null,
                 visaSponsorship: job.visaSponsorship ?? false,
-                experienceLevel: job.experienceLevel,
+                experienceLevel: job.experienceLevel ?? null,
                 isActive: true,
               },
               update: {
                 title: job.title,
-                description: job.description,
-                skills: job.skills,
-                salaryMin: job.salaryMin,
-                salaryMax: job.salaryMax,
+                description: job.description || "<p>No description available.</p>",
+                skills: job.skills ?? [],
+                salaryMin: job.salaryMin ?? null,
+                salaryMax: job.salaryMax ?? null,
                 isActive: true,
                 updatedAt: new Date(),
               },
             });
             upserted++;
-          } catch {
+          } catch (err) {
             errors++;
+            console.error(`[POST /api/jobs] Upsert failed for ${job.externalId}:`, err instanceof Error ? err.message : err);
           }
         })
       );
     }
 
+    const durationMs = Date.now() - startTime;
+    console.log(`[POST /api/jobs] Done: ${upserted} upserted, ${errors} errors in ${durationMs}ms`);
+
     return NextResponse.json({
       success: true,
-      message: `Synced ${upserted} jobs (${errors} errors)`,
+      message: `Synced ${upserted} jobs (${errors} errors) in ${durationMs}ms`,
       upserted,
       errors,
+      total: rawJobs.length,
+      durationMs,
     });
   } catch (err) {
-    console.error("[POST /api/jobs/sync]", err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[POST /api/jobs/sync] Fatal:", msg);
     return NextResponse.json(
-      { success: false, error: "Sync failed" },
+      { success: false, error: `Sync failed: ${msg}` },
       { status: 500 }
     );
   }

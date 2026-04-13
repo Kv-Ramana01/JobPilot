@@ -8,6 +8,15 @@ import type {
   CoverLetterTone,
 } from "@/types";
 
+// ─── Model priority list — tries in order until one works ─────────
+
+const MODEL_NAMES = [
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-latest",
+  "gemini-2.0-flash",
+  "gemini-1.5-pro",
+];
+
 // ─── Client (lazy-init) ───────────────────────────────────────────
 
 let _client: GoogleGenerativeAI | null = null;
@@ -15,30 +24,103 @@ let _client: GoogleGenerativeAI | null = null;
 function getClient(): GoogleGenerativeAI {
   if (!_client) {
     const key = process.env.GEMINI_API_KEY;
-    if (!key) throw new Error("GEMINI_API_KEY is not set");
+    if (!key) throw new Error("GEMINI_API_KEY is not set in environment variables");
     _client = new GoogleGenerativeAI(key);
   }
   return _client;
 }
 
-function getModel(name = "gemini-1.5-flash") {
+function getModel(name = MODEL_NAMES[0]) {
   return getClient().getGenerativeModel({ model: name });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
-async function generateJSON<T>(prompt: string): Promise<T> {
-  const model = getModel();
-  const result = await model.generateContent(prompt);
-  const raw = result.response.text();
-
-  // Strip markdown code fences if present
-  const clean = raw
-    .replace(/^```json\s*/m, "")
+/**
+ * Clean Gemini response text to extract JSON.
+ * Handles markdown code fences, leading/trailing whitespace, and
+ * occasional prefixes like "Here is the JSON:"
+ */
+function extractJSON(raw: string): string {
+  // Remove markdown code fences (```json ... ``` or ``` ... ```)
+  let clean = raw
+    .replace(/^```(?:json)?\s*/m, "")
     .replace(/```\s*$/m, "")
     .trim();
 
-  return JSON.parse(clean) as T;
+  // If there's a JSON object/array in the text, extract it
+  // (handles cases where Gemini adds preamble text)
+  const jsonStart = clean.search(/[\[{]/);
+  if (jsonStart > 0) {
+    clean = clean.slice(jsonStart);
+  }
+
+  // Find the matching closing bracket/brace
+  const firstChar = clean[0];
+  if (firstChar === "[" || firstChar === "{") {
+    const closeChar = firstChar === "[" ? "]" : "}";
+    const lastIndex = clean.lastIndexOf(closeChar);
+    if (lastIndex !== -1) {
+      clean = clean.slice(0, lastIndex + 1);
+    }
+  }
+
+  return clean.trim();
+}
+
+/**
+ * Generate JSON from Gemini, with model fallback on error.
+ */
+async function generateJSON<T>(prompt: string, modelName?: string): Promise<T> {
+  const modelsToTry = modelName ? [modelName, ...MODEL_NAMES.filter(m => m !== modelName)] : MODEL_NAMES;
+
+  let lastError: Error | null = null;
+
+  for (const model of modelsToTry) {
+    try {
+      console.log(`[Gemini] Trying model: ${model}`);
+      const genModel = getModel(model);
+
+      const result = await genModel.generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 4096,
+        },
+      });
+
+      const raw = result.response.text();
+
+      if (!raw || raw.trim() === "") {
+        throw new Error("Gemini returned empty response");
+      }
+
+      const clean = extractJSON(raw);
+      console.log(`[Gemini/${model}] Response length: ${clean.length} chars`);
+
+      const parsed = JSON.parse(clean) as T;
+      return parsed;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[Gemini/${model}] Error: ${message}`);
+      lastError = err instanceof Error ? err : new Error(message);
+
+      // Don't retry on JSON parse errors — the model responded but gave bad JSON
+      // Do retry on network/quota/model-not-found errors
+      if (message.includes("JSON") || message.includes("Unexpected token")) {
+        throw new Error(`Gemini returned invalid JSON. Raw: ${message}`);
+      }
+
+      // Rate limit — don't try other models, just throw
+      if (message.includes("429") || message.includes("quota") || message.includes("rate")) {
+        throw new Error("Gemini rate limit reached. Please try again in a moment.");
+      }
+
+      continue;
+    }
+  }
+
+  throw lastError ?? new Error("All Gemini models failed");
 }
 
 // ─── Resume Analysis ──────────────────────────────────────────────
@@ -49,57 +131,63 @@ export async function analyzeResume(
   jobTitle: string,
   company: string
 ): Promise<ResumeAnalysis> {
-  const prompt = `
-You are an expert ATS (Applicant Tracking System) analyst and technical resume coach.
+  if (!resumeText || resumeText.trim().length < 50) {
+    throw new Error("Resume text is too short for analysis");
+  }
+  if (!jobDescription || jobDescription.trim().length < 30) {
+    throw new Error("Job description is too short for analysis");
+  }
 
-Analyze this resume against the job description below and return a JSON response ONLY — no markdown, no preamble.
+  // Truncate to avoid token limits (keep first ~3000 chars of each)
+  const truncatedResume = resumeText.slice(0, 3000);
+  const truncatedJD = jobDescription.slice(0, 2000);
+
+  const prompt = `You are an expert ATS (Applicant Tracking System) analyst and technical resume coach.
+
+Analyze this resume against the job description and return ONLY valid JSON — no markdown, no explanation, no preamble.
 
 JOB TITLE: ${jobTitle}
 COMPANY: ${company}
 
 JOB DESCRIPTION:
-${jobDescription}
+${truncatedJD}
 
 CANDIDATE RESUME:
-${resumeText}
+${truncatedResume}
 
-Return exactly this JSON structure:
+Return this exact JSON structure (all fields required):
 {
-  "atsScore": <integer 0-100, strict ATS keyword match>,
-  "matchScore": <integer 0-100, overall fit including soft signals>,
-  "missingKeywords": [<strings — important keywords from JD not in resume>],
-  "presentKeywords": [<strings — JD keywords already in resume>],
-  "skillsGap": [<strings — skills the candidate should learn/add for this role>],
-  "summary": "<current resume summary or first impression>",
-  "improvedSummary": "<rewritten 3-sentence professional summary tailored to this role>",
+  "atsScore": 72,
+  "matchScore": 68,
+  "missingKeywords": ["keyword1", "keyword2"],
+  "presentKeywords": ["keyword3", "keyword4"],
+  "skillsGap": ["skill1", "skill2"],
+  "summary": "Current resume summary here",
+  "improvedSummary": "Improved 3-sentence summary tailored to this role",
   "suggestions": [
     {
-      "type": "<keyword|structure|quantify|format|tone>",
-      "priority": "<high|medium|low>",
-      "original": "<original text if applicable, else null>",
-      "suggestion": "<specific actionable change>",
-      "reason": "<why this improves the resume>"
+      "type": "keyword",
+      "priority": "high",
+      "original": null,
+      "suggestion": "Add TypeScript to skills section",
+      "reason": "Job requires TypeScript — not mentioned in resume"
     }
   ],
   "improvedBullets": [
     {
-      "original": "<existing bullet point>",
-      "improved": "<rewritten bullet with stronger action verb, metrics, keywords>",
-      "explanation": "<what changed and why>"
+      "original": "Worked on React app",
+      "improved": "Built React dashboard reducing page load by 40% for 10k+ daily users",
+      "explanation": "Added metrics and user scale for impact"
     }
   ]
 }
 
 Rules:
-- Be specific and actionable, not generic
-- Prioritize suggestions by impact on ATS score
-- Improved bullets must use the STAR/XYZ method
-- Add real keywords from the JD
-- Quantify wherever possible (even estimated: "~20% improvement")
-- missingKeywords should have at most 10 items
-- suggestions should have 4-6 items
-- improvedBullets should rewrite 3-4 of the weakest bullets
-`;
+- atsScore and matchScore must be integers 0-100
+- missingKeywords: max 8 items
+- suggestions: 4-6 items with priority "high"|"medium"|"low"
+- improvedBullets: rewrite 3 weakest bullets using STAR method
+- Return ONLY the JSON object, nothing else`;
 
   return generateJSON<ResumeAnalysis>(prompt);
 }
@@ -123,7 +211,7 @@ export async function generateCoverLetter(
 ): Promise<CoverLetterResult> {
   const toneGuide: Record<CoverLetterTone, string> = {
     formal:
-      "Professional and traditional. Third-person references acceptable. Conservative vocabulary.",
+      "Professional and traditional. Conservative vocabulary.",
     confident:
       "Direct and assured. Uses 'I will' not 'I hope to'. Shows ambition without arrogance.",
     friendly:
@@ -131,44 +219,44 @@ export async function generateCoverLetter(
     concise:
       "Under 200 words. Gets to the point immediately. No filler phrases.",
     detailed:
-      "350-450 words. Shows deep research about the company. Connects experiences to role requirements specifically.",
+      "350-450 words. Shows deep research. Connects past experience to role requirements specifically.",
   };
 
-  const prompt = `
-You are an expert cover letter writer who helps software developers land jobs.
+  const truncatedJD = job.description.slice(0, 1500);
 
-Write a ${tone} cover letter and return JSON ONLY — no markdown, no preamble.
+  const prompt = `You are an expert cover letter writer for software developers.
 
-TONE GUIDE: ${toneGuide[tone]}
+Write a ${tone} cover letter. Return ONLY valid JSON — no markdown, no preamble.
+
+TONE: ${toneGuide[tone]}
 
 CANDIDATE:
 Name: ${userProfile.fullName}
-Experience level: ${userProfile.experienceLevel}
-Skills: ${userProfile.skills.join(", ")}
-${userProfile.bio ? `Bio: ${userProfile.bio}` : ""}
+Experience: ${userProfile.experienceLevel}
+Skills: ${userProfile.skills.slice(0, 15).join(", ")}
+${userProfile.bio ? `Bio: ${userProfile.bio.slice(0, 200)}` : ""}
 
 JOB:
 Title: ${job.title}
 Company: ${job.company}
-Description: ${job.description}
-${job.requirements ? `Requirements: ${job.requirements}` : ""}
+Description: ${truncatedJD}
+${job.requirements ? `Requirements: ${job.requirements.slice(0, 500)}` : ""}
 
-Return exactly this JSON:
+Return this exact JSON:
 {
-  "subject": "<email subject line>",
-  "body": "<full cover letter body — use \\n for line breaks>",
+  "subject": "Application for ${job.title} at ${job.company}",
+  "body": "Dear Hiring Team,\\n\\n[opening paragraph]\\n\\n[middle paragraph with achievements]\\n\\nBest regards,\\n${userProfile.fullName}",
   "tone": "${tone}"
 }
 
 Rules:
-- Opening paragraph: hook + why this specific company
-- Middle: 1-2 most relevant achievements tied to JD requirements
-- Closing: clear CTA, confident sign-off
-- Do NOT use clichés like "I am writing to express my interest"
-- Do NOT say "I am a quick learner" or "I am passionate"
-- Use the candidate's actual skills; don't invent experience
-- The body should start with "Dear Hiring Team," or a specific name if known
-`;
+- body must use \\n for line breaks
+- Opening: hook + why this specific company  
+- Middle: 1-2 relevant achievements tied to JD requirements
+- Closing: clear CTA
+- Do NOT use "I am writing to express my interest"
+- Do NOT say "I am a passionate" or "I am a quick learner"
+- Return ONLY the JSON object`;
 
   return generateJSON<CoverLetterResult>(prompt);
 }
@@ -188,29 +276,30 @@ export async function generateInterviewQuestions(
   jobDescription: string,
   skills: string[]
 ): Promise<InterviewQuestion[]> {
-  const prompt = `
-You are a senior engineering interview coach.
+  const truncatedJD = jobDescription.slice(0, 1000);
 
-Generate 8 interview questions for this role and return JSON ONLY — no markdown.
+  const prompt = `You are a senior engineering interview coach.
+
+Generate 8 interview questions for this role. Return ONLY a valid JSON array — no markdown, no preamble.
 
 ROLE: ${jobTitle}
-JD: ${jobDescription}
-KEY SKILLS: ${skills.join(", ")}
+JD: ${truncatedJD}
+KEY SKILLS: ${skills.slice(0, 10).join(", ")}
 
-Return an array of exactly 8 objects:
+Return this exact structure (array of 8 objects):
 [
   {
-    "question": "<interview question>",
-    "category": "<behavioral|technical|situational|culture>",
-    "difficulty": "<easy|medium|hard>",
-    "suggestedAnswer": "<model answer using STAR method where applicable>",
-    "tips": ["<tip 1>", "<tip 2>"]
+    "question": "Tell me about a time you optimized a slow database query",
+    "category": "technical",
+    "difficulty": "medium",
+    "suggestedAnswer": "Use STAR method: Situation - our checkout page was slow (3s). Task - reduce to under 500ms. Action - added indexes, rewrote N+1 queries, added Redis caching. Result - 85% faster, 20% higher conversion.",
+    "tips": ["Be specific about the technology used", "Quantify the improvement"]
   }
 ]
 
 Mix: 3 technical, 2 behavioral, 2 situational, 1 culture.
-Make technical questions specific to the job's tech stack.
-`;
+Technical questions must be specific to the job's tech stack.
+Return ONLY the JSON array, nothing else.`;
 
   return generateJSON<InterviewQuestion[]>(prompt);
 }
@@ -229,34 +318,36 @@ export async function analyzeSkillsGap(
   jobDescription: string,
   jobTitle: string
 ): Promise<SkillsGapResult> {
-  const prompt = `
-You are a technical career coach.
+  const truncatedJD = jobDescription.slice(0, 1000);
 
-Analyze the skills gap between a candidate and a job. Return JSON ONLY.
+  const prompt = `You are a technical career coach.
 
-CANDIDATE SKILLS: ${userSkills.join(", ")}
+Analyze the skills gap and return ONLY valid JSON — no markdown, no preamble.
+
+CANDIDATE SKILLS: ${userSkills.slice(0, 20).join(", ")}
 JOB TITLE: ${jobTitle}
-JOB DESCRIPTION: ${jobDescription}
+JOB DESCRIPTION: ${truncatedJD}
 
-Return exactly this structure:
+Return this exact JSON:
 {
   "mustLearn": [
     {
-      "skill": "<skill name>",
-      "reason": "<why this is critical for the role>",
-      "resources": ["<free resource URL or name>"]
+      "skill": "Kubernetes",
+      "reason": "Required for deploying services at this company",
+      "resources": ["kubernetes.io/docs", "KodeKloud free tier"]
     }
   ],
   "niceToHave": [
     {
-      "skill": "<skill name>",
-      "reason": "<why helpful but not blocking>"
+      "skill": "Terraform",
+      "reason": "Used by team but not blocking for the role"
     }
   ],
-  "strongAlready": ["<skills the candidate has that match well>"],
-  "estimatedPrepWeeks": <integer — realistic weeks to fill the gap with ~2 hrs/day>
+  "strongAlready": ["React", "TypeScript"],
+  "estimatedPrepWeeks": 6
 }
-`;
+
+Return ONLY the JSON object, nothing else.`;
 
   return generateJSON<SkillsGapResult>(prompt);
 }
