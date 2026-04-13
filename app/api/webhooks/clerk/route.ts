@@ -4,7 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Webhook } from "svix";
 import { db } from "@/lib/db";
-
+export const dynamic = 'force-dynamic';
 interface ClerkUserEvent {
   type: "user.created" | "user.updated" | "user.deleted";
   data: {

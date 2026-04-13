@@ -1,13 +1,13 @@
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
+const nextConfig: any = {
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**" },
     ],
   },
   experimental: {
-    serverActions: { bodySizeLimit: "10mb" },
+    serverActions: {
+      bodySizeLimit: "10mb",
+    },
   },
   eslint: {
     ignoreDuringBuilds: true,

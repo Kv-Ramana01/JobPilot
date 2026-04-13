@@ -21,7 +21,6 @@ import { toast } from "@/hooks/use-toast";
 import { Loader2, X, Plus, User, Briefcase, Globe, Link2 } from "lucide-react";
 import { ExperienceLevel } from "@prisma/client";
 import { expLabel } from "@/lib/utils";
-import type { Metadata } from "next";
 
 const schema = z.object({
   fullName: z.string().min(1, "Name is required").max(100),
