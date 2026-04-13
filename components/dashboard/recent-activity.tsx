@@ -1,6 +1,6 @@
 // components/dashboard/recent-activity.tsx
 import Link from "next/link";
-import { formatRelativeDate, statusColor, statusLabel } from "@/lib/utils";
+import { formatRelativeDate, statusLabel } from "@/lib/utils";
 import { Application, Job } from "@prisma/client";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,16 @@ const STATUS_DOT: Record<string, string> = {
   OA: "bg-amber-500",
   SAVED: "bg-gray-400",
   WITHDRAWN: "bg-gray-400",
+};
+
+const STATUS_BADGE: Record<string, string> = {
+  SAVED: "bg-gray-100 text-gray-700",
+  APPLIED: "bg-blue-50 text-blue-700",
+  OA: "bg-amber-50 text-amber-700",
+  INTERVIEW: "bg-green-50 text-green-700",
+  OFFER: "bg-purple-50 text-purple-700",
+  REJECTED: "bg-red-50 text-red-700",
+  WITHDRAWN: "bg-gray-100 text-gray-500",
 };
 
 export function RecentActivity({ applications }: { applications: AppWithJob[] }) {
@@ -60,7 +70,7 @@ export function RecentActivity({ applications }: { applications: AppWithJob[] })
                   <span
                     className={cn(
                       "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium",
-                      statusColor(app.status)
+                      STATUS_BADGE[app.status] ?? "bg-gray-100 text-gray-600"
                     )}
                   >
                     {statusLabel(app.status)}

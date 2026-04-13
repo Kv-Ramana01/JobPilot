@@ -4,11 +4,12 @@
 import { useState } from "react";
 import { useTheme } from "next-themes";
 import { useUser, useClerk } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/hooks/use-toast";
 import {
-  Moon, Sun, Monitor, Bell, Trash2, LogOut,
+  Moon, Sun, Monitor, Trash2, LogOut,
   Shield, Palette, BellRing,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -17,6 +18,7 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { user } = useUser();
   const { signOut } = useClerk();
+  const router = useRouter();
   const [emailNotifs, setEmailNotifs] = useState(true);
   const [inAppNotifs, setInAppNotifs] = useState(true);
   const [deleting, setDeleting] = useState(false);
@@ -27,12 +29,18 @@ export default function SettingsPage() {
     try {
       await fetch("/api/users/profile", { method: "DELETE" });
       await user?.delete();
-      await signOut();
+      // In Clerk v7, signOut accepts options object with redirectUrl
+      await signOut({ redirectUrl: "/" });
     } catch {
       toast({ title: "Error", description: "Could not delete account.", variant: "destructive" });
     } finally {
       setDeleting(false);
     }
+  }
+
+  async function handleSignOut() {
+    // In Clerk v7, signOut accepts options object with redirectUrl
+    await signOut({ redirectUrl: "/" });
   }
 
   const THEMES = [
@@ -105,7 +113,7 @@ export default function SettingsPage() {
           <Button
             variant="outline"
             className="w-full justify-start gap-2"
-            onClick={() => signOut()}
+            onClick={handleSignOut}
           >
             <LogOut className="h-4 w-4" />
             Sign out

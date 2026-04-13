@@ -101,7 +101,9 @@ export function Sidebar() {
       {/* User */}
       <div className="border-t p-4 dark:border-gray-800">
         <div className="flex items-center gap-3">
-          <UserButton afterSignOutUrl="/" />
+          {/* In Clerk v7, afterSignOutUrl is configured via clerkMiddleware or
+              the NEXT_PUBLIC_CLERK_AFTER_SIGN_OUT_URL env var, not as a prop */}
+          <UserButton />
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs font-medium text-gray-900 dark:text-white">
               My Account

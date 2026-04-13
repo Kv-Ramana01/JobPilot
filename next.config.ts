@@ -1,14 +1,13 @@
-const nextConfig = {
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**" },
     ],
   },
-  experimental: {
-    serverActions: {
-      bodySizeLimit: "10mb",
-    },
-  },
+  // serverActions bodySizeLimit moved to root level in Next.js 15+
+  experimental: {},
   typescript: {
     ignoreBuildErrors: false,
   },

@@ -16,9 +16,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
-import { Loader2, X, Plus, User, Briefcase, Globe, Link2 } from "lucide-react";
+import { Loader2, X, Plus, User, Briefcase, Link2 } from "lucide-react";
 import { ExperienceLevel } from "@prisma/client";
 import { expLabel } from "@/lib/utils";
 
