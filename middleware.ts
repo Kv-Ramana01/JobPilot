@@ -11,6 +11,7 @@ const isPublicRoute = createRouteMatcher([
   "/jobs/(.*)",
   "/api/jobs(.*)",
   "/api/webhooks(.*)",
+  "/api/cron(.*)",
 ]);
 
 const isAuthRoute = createRouteMatcher([
