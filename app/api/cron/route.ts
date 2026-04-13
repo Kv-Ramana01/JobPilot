@@ -1,14 +1,10 @@
 // app/api/cron/route.ts
-// Called by Vercel Cron or an external scheduler (Railway, etc.)
-// Schedule: */30 * * * * (every 30 minutes for job sync)
-//           0 8 * * *    (daily at 8am for alert emails)
-
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { aggregateJobs } from "@/services/job-aggregator";
 import { sendJobAlertEmail } from "@/services/email";
 import { formatSalary } from "@/lib/utils";
-import { AlertFrequency } from "@prisma/client";
+import { AlertFrequency, Prisma } from "@prisma/client";
 
 function verifySecret(req: NextRequest): boolean {
   const auth = req.headers.get("authorization");
@@ -109,30 +105,31 @@ async function runAlertEmails() {
 
   for (const alert of alerts) {
     try {
-      // Match jobs against alert criteria
       const cutoff = alert.lastSentAt ?? new Date(now.getTime() - 24 * 3600 * 1000);
 
+      const whereClause: Prisma.JobWhereInput = {
+        isActive: true,
+        postedAt: { gte: cutoff },
+        ...(alert.remote ? { isRemote: true } : {}),
+        ...(alert.keywords.length > 0
+          ? {
+              OR: alert.keywords.map((kw) => ({
+                OR: [
+                  { title: { contains: kw, mode: "insensitive" as const } },
+                  { description: { contains: kw, mode: "insensitive" as const } },
+                  { skills: { has: kw } },
+                ],
+              })),
+            }
+          : {}),
+        ...(alert.jobTypes.length > 0 ? { jobType: { in: alert.jobTypes } } : {}),
+        ...(alert.workTypes.length > 0 ? { workType: { in: alert.workTypes } } : {}),
+        ...(alert.countries.length > 0 ? { country: { in: alert.countries } } : {}),
+        ...(alert.minSalary ? { salaryMax: { gte: alert.minSalary } } : {}),
+      };
+
       const matchingJobs = await db.job.findMany({
-        where: {
-          isActive: true,
-          postedAt: { gte: cutoff },
-          ...(alert.remote ? { isRemote: true } : {}),
-          ...(alert.keywords.length > 0
-            ? {
-                OR: alert.keywords.map((kw) => ({
-                  OR: [
-                    { title: { contains: kw, mode: "insensitive" as const } },
-                    { description: { contains: kw, mode: "insensitive" as const } },
-                    { skills: { has: kw } },
-                  ],
-                })),
-              }
-            : {}),
-          ...(alert.jobTypes.length > 0 ? { jobType: { in: alert.jobTypes } } : {}),
-          ...(alert.workTypes.length > 0 ? { workType: { in: alert.workTypes } } : {}),
-          ...(alert.countries.length > 0 ? { country: { in: alert.countries } } : {}),
-          ...(alert.minSalary ? { salaryMax: { gte: alert.minSalary } } : {}),
-        },
+        where: whereClause,
         take: 15,
         orderBy: { postedAt: "desc" },
       });

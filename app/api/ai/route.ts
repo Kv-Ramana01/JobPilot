@@ -10,7 +10,7 @@ import {
   analyzeSkillsGap,
 } from "@/services/gemini";
 import { z } from "zod";
-import { AiTaskType } from "@prisma/client";
+import { AiTaskType, Prisma } from "@prisma/client";
 
 // ─── Schemas ──────────────────────────────────────────────────────
 
@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
         company: "company" in data ? data.company : undefined,
         jobDesc: "jobDescription" in data ? data.jobDescription : undefined,
         resumeId: "resumeId" in data ? data.resumeId : undefined,
-        result: result as object,
+        result: result as Prisma.InputJsonValue,
       },
     });
 

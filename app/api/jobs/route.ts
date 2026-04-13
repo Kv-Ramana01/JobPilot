@@ -4,7 +4,6 @@ import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { aggregateJobs } from "@/services/job-aggregator";
 import { z } from "zod";
-import type { JobFilters } from "@/types";
 import { JobType, WorkType, ExperienceLevel, Prisma } from "@prisma/client";
 
 // ─── GET /api/jobs — search & filter jobs ─────────────────────────
@@ -28,17 +27,17 @@ const filtersSchema = z.object({
 export async function GET(req: NextRequest) {
   try {
     const { userId } = await auth();
-    const sp = Object.fromEntries(req.nextUrl.searchParams);
+    const sp = Object.fromEntries(req.nextUrl.searchParams) as Record<string, unknown>;
 
     // Parse array params from comma-separated strings
     if (typeof sp.jobType === "string") {
-      (sp as Record<string, unknown>).jobType = sp.jobType.split(",");
+      sp.jobType = sp.jobType.split(",");
     }
     if (typeof sp.workType === "string") {
-      (sp as Record<string, unknown>).workType = sp.workType.split(",");
+      sp.workType = sp.workType.split(",");
     }
     if (typeof sp.countries === "string") {
-      (sp as Record<string, unknown>).countries = sp.countries.split(",");
+      sp.countries = sp.countries.split(",");
     }
 
     const filters = filtersSchema.parse(sp);

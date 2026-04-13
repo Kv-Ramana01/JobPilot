@@ -1,4 +1,4 @@
-const nextConfig: any = {
+const nextConfig = {
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**" },
@@ -11,6 +11,9 @@ const nextConfig: any = {
   },
   eslint: {
     ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: false,
   },
 };
 

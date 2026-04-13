@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { z } from "zod";
-import { ApplicationStatus } from "@prisma/client";
+import { ApplicationStatus, Prisma } from "@prisma/client";
 
 const patchSchema = z.object({
   status: z.nativeEnum(ApplicationStatus).optional(),
@@ -42,22 +42,14 @@ export async function PATCH(
   const data = parsed.data;
 
   // Build timeline entry
-  const currentTimeline = Array.isArray(app.timeline) ? app.timeline : [];
+  const currentTimeline = Array.isArray(app.timeline) ? (app.timeline as Record<string, unknown>[]) : [];
   const timelineEntry = data.status
     ? { event: data.status, at: new Date().toISOString() }
     : null;
 
-  // Date fields
-  const dateUpdate: Record<string, Date | undefined> = {};
-  if (data.status === ApplicationStatus.INTERVIEW) {
-    dateUpdate.interviewDate = data.interviewDate ? new Date(data.interviewDate) : undefined;
-  }
-  if (data.status === ApplicationStatus.OFFER) {
-    dateUpdate.offerReceivedAt = new Date();
-  }
-  if (data.status === ApplicationStatus.REJECTED) {
-    dateUpdate.rejectedAt = new Date();
-  }
+  const newTimeline: Prisma.InputJsonValue = timelineEntry
+    ? [...currentTimeline, timelineEntry] as unknown as Prisma.InputJsonValue
+    : currentTimeline as unknown as Prisma.InputJsonValue;
 
   const updated = await db.application.update({
     where: { id },
@@ -69,9 +61,7 @@ export async function PATCH(
       ...(data.oaDeadline && { oaDeadline: new Date(data.oaDeadline) }),
       ...(data.status === ApplicationStatus.OFFER && { offerReceivedAt: new Date() }),
       ...(data.status === ApplicationStatus.REJECTED && { rejectedAt: new Date() }),
-      ...(timelineEntry && {
-        timeline: [...currentTimeline, timelineEntry],
-      }),
+      ...(timelineEntry && { timeline: newTimeline }),
       updatedAt: new Date(),
     },
     include: { job: true },

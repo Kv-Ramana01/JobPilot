@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import { z } from "zod";
-import { ApplicationStatus, ApplyMode } from "@prisma/client";
+import { ApplicationStatus, ApplyMode, Prisma } from "@prisma/client";
 
 const createSchema = z.object({
   jobId: z.string(),
@@ -60,6 +60,8 @@ export async function POST(req: NextRequest) {
   const job = await db.job.findUnique({ where: { id: jobId } });
   if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
+  const initialTimeline: Prisma.InputJsonValue = [{ event: "Applied", at: new Date().toISOString() }];
+
   // Upsert — avoid duplicates
   const application = await db.application.upsert({
     where: { userId_jobId: { userId: user.id, jobId } },
@@ -72,7 +74,7 @@ export async function POST(req: NextRequest) {
       coverLetter,
       notes,
       appliedAt: new Date(),
-      timeline: [{ event: "Applied", at: new Date().toISOString() }],
+      timeline: initialTimeline,
     },
     update: {
       status: ApplicationStatus.APPLIED,

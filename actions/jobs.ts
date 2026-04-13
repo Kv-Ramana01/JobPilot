@@ -65,7 +65,7 @@ export async function trackApplicationAction(
       coverLetter: opts.coverLetter,
       notes: opts.notes,
       appliedAt: new Date(),
-      timeline: [{ event: "Applied", at: new Date().toISOString() }],
+      timeline: [{ event: "Applied", at: new Date().toISOString() }] as unknown as import("@prisma/client").Prisma.InputJsonValue,
     },
     update: {
       status: ApplicationStatus.APPLIED,
@@ -101,13 +101,14 @@ export async function updateApplicationStatusAction(
   });
   if (!app) throw new Error("Application not found");
 
-  const currentTimeline = Array.isArray(app.timeline) ? app.timeline : [];
+  const currentTimeline = Array.isArray(app.timeline) ? app.timeline as Record<string, unknown>[] : [];
+  const newTimeline = [...currentTimeline, { event: status, at: new Date().toISOString() }] as unknown as import("@prisma/client").Prisma.InputJsonValue;
 
   await db.application.update({
     where: { id: applicationId },
     data: {
       status,
-      timeline: [...currentTimeline, { event: status, at: new Date().toISOString() }],
+      timeline: newTimeline,
       ...(status === ApplicationStatus.OFFER && { offerReceivedAt: new Date() }),
       ...(status === ApplicationStatus.REJECTED && { rejectedAt: new Date() }),
       updatedAt: new Date(),

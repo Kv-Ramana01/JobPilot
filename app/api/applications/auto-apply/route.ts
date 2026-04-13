@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
   const user = await db.user.findUnique({
     where: { clerkId },
     include: {
-      profile: { include: { resumes: true } as never },
+      profile: true,
+      resumes: true,
     },
   });
   if (!user || !user.profile) {
@@ -59,7 +60,7 @@ export async function POST(req: NextRequest) {
   const result = await autoApply({
     jobId,
     applyUrl: job.sourceUrl,
-    profile: user.profile as never,
+    profile: user.profile,
     resumeUrl,
   });
 

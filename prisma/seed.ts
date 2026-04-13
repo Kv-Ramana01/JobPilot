@@ -24,25 +24,26 @@ const EXTRA_SKILLS = [["JavaScript","React","Node.js"],["Python","Django","Postg
 async function main() {
   const extraJobs = Array.from({ length: 38 }, (_, i) => ({
     externalId: `s-extra-${i.toString().padStart(3,"0")}`,
-    source: [JobSource.GREENHOUSE,JobSource.LEVER,JobSource.REMOTIVE,JobSource.ADZUNA][i%4],
+    source: [JobSource.GREENHOUSE,JobSource.LEVER,JobSource.REMOTIVE,JobSource.ADZUNA][i%4] as JobSource,
     title: EXTRA_ROLES[i%EXTRA_ROLES.length],
     company: EXTRA_COMPANIES[i%EXTRA_COMPANIES.length],
-    companyLogo: null,
+    companyLogo: null as string | null,
     location: ["Remote Worldwide","Berlin, Germany","London, UK","Toronto, Canada","Bengaluru, India","Singapore","Amsterdam, Netherlands"][i%7],
     country: ["USA","Germany","UK","Canada","India","Singapore","Netherlands"][i%7],
     isRemote: i%3!==0,
-    workType: [WorkType.REMOTE,WorkType.HYBRID,WorkType.ONSITE][i%3],
-    jobType: i%6===0 ? JobType.INTERNSHIP : JobType.FULL_TIME,
-    experienceLevel: [ExperienceLevel.FRESHER,ExperienceLevel.JUNIOR,ExperienceLevel.MID][i%3],
+    workType: [WorkType.REMOTE,WorkType.HYBRID,WorkType.ONSITE][i%3] as WorkType,
+    jobType: i%6===0 ? JobType.INTERNSHIP : JobType.FULL_TIME as JobType,
+    experienceLevel: [ExperienceLevel.FRESHER,ExperienceLevel.JUNIOR,ExperienceLevel.MID][i%3] as ExperienceLevel,
     salaryMin: [60000,70000,80000,90000,100000,1200000,1500000][i%7],
     salaryMax: [90000,105000,120000,135000,150000,1800000,2200000][i%7],
     currency: ["USD","EUR","GBP","CAD","INR","USD","EUR"][i%7],
-    skills: EXTRA_SKILLS[i%EXTRA_SKILLS.length],
+    skills: EXTRA_SKILLS[i%EXTRA_SKILLS.length] as string[],
     description: `<p>We're a fast-growing technology company building tools developers love. We ship high-quality software every week with a strong engineering culture.</p><p>You'll work on real features, own your projects end-to-end, and grow fast in a collaborative environment.</p>`,
     sourceUrl: `https://example.com/jobs/extra-${i}`,
     visaSponsorship: i%5===0,
     postedAt: new Date(Date.now()-86400000*((i%21)+1)),
     benefits: [] as string[],
+    requirements: null as string | null,
   }));
 
   const allJobs = [...CORE_JOBS, ...extraJobs];
@@ -52,7 +53,14 @@ async function main() {
   for (const job of allJobs) {
     await db.job.upsert({
       where: { externalId_source: { externalId: job.externalId, source: job.source } },
-      create: { ...job, benefits: job.benefits ?? [], requirements: null, isActive: true, viewCount: Math.floor(Math.random()*300), applyCount: Math.floor(Math.random()*50) },
+      create: {
+        ...job,
+        benefits: "benefits" in job ? job.benefits ?? [] : [],
+        requirements: "requirements" in job ? job.requirements : null,
+        isActive: true,
+        viewCount: Math.floor(Math.random()*300),
+        applyCount: Math.floor(Math.random()*50),
+      },
       update: { updatedAt: new Date() },
     }).then(()=>created++).catch(()=>{});
   }

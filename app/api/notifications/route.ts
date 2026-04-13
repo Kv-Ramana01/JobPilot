@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { db } from "@/lib/db";
 import type { NotificationPayload } from "@/types";
+import { Prisma } from "@prisma/client";
 
 // GET /api/notifications
 export async function GET(req: NextRequest) {
@@ -45,6 +46,8 @@ export async function POST(req: NextRequest) {
 
   const payload = await req.json() as NotificationPayload;
 
+  const metaValue: Prisma.InputJsonValue = (payload.meta ?? {}) as Prisma.InputJsonValue;
+
   const notification = await db.notification.create({
     data: {
       userId: payload.userId,
@@ -52,7 +55,7 @@ export async function POST(req: NextRequest) {
       title: payload.title,
       body: payload.body,
       link: payload.link,
-      meta: payload.meta ?? {},
+      meta: metaValue,
     },
   });
 
