@@ -1,29 +1,40 @@
-// app/api/webhooks/clerk/route.ts
-// Syncs Clerk user events → our PostgreSQL database
-
 import { NextRequest, NextResponse } from "next/server";
 import { Webhook } from "svix";
 import { db } from "@/lib/db";
-export const dynamic = 'force-dynamic';
+
+export const dynamic = "force-dynamic";
+
 interface ClerkUserEvent {
   type: "user.created" | "user.updated" | "user.deleted";
   data: {
     id: string;
-    email_addresses: { email_address: string; id: string }[];
-    primary_email_address_id: string;
-    first_name: string | null;
-    last_name: string | null;
-    image_url: string | null;
+    email_addresses?: { email_address: string; id: string }[];
+    primary_email_address_id?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    image_url?: string | null;
   };
 }
 
+function getEmail(data: ClerkUserEvent["data"]) {
+  return (
+    data.email_addresses?.find(
+      (e) => e.id === data.primary_email_address_id
+    )?.email_address ||
+    data.email_addresses?.[0]?.email_address ||
+    ""
+  );
+}
+
 export async function POST(req: NextRequest) {
-  const webhookSecret = process.env.CLERK_WEBHOOK_SECRET;
-  if (!webhookSecret) {
-    return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 });
+  const secret = process.env.CLERK_WEBHOOK_SECRET;
+  if (!secret) {
+    return NextResponse.json(
+      { error: "Webhook secret not configured" },
+      { status: 500 }
+    );
   }
 
-  // Verify signature
   const svixId = req.headers.get("svix-id");
   const svixTimestamp = req.headers.get("svix-timestamp");
   const svixSignature = req.headers.get("svix-signature");
@@ -33,9 +44,10 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.text();
-  const wh = new Webhook(webhookSecret);
+  const wh = new Webhook(secret);
 
   let event: ClerkUserEvent;
+
   try {
     event = wh.verify(body, {
       "svix-id": svixId,
@@ -50,25 +62,23 @@ export async function POST(req: NextRequest) {
 
   try {
     if (type === "user.created") {
-      const primaryEmail = data.email_addresses.find(
-        (e) => e.id === data.primary_email_address_id
-      )?.email_address;
-
-      if (!primaryEmail) {
-        return NextResponse.json({ error: "No primary email" }, { status: 400 });
-      }
-
+      const email = getEmail(data);
       const fullName =
         [data.first_name, data.last_name].filter(Boolean).join(" ") || null;
 
-      await db.user.create({
-        data: {
+      await db.user.upsert({
+        where: { clerkId: data.id },
+        update: {
+          email,
+          updatedAt: new Date(),
+        },
+        create: {
           clerkId: data.id,
-          email: primaryEmail,
+          email,
           profile: {
             create: {
               fullName,
-              avatarUrl: data.image_url,
+              avatarUrl: data.image_url ?? null,
             },
           },
         },
@@ -76,29 +86,28 @@ export async function POST(req: NextRequest) {
     }
 
     if (type === "user.updated") {
-      const primaryEmail = data.email_addresses.find(
-        (e) => e.id === data.primary_email_address_id
-      )?.email_address;
-
-      await db.user.update({
+      await db.user.upsert({
         where: { clerkId: data.id },
-        data: {
-          ...(primaryEmail && { email: primaryEmail }),
+        update: {
+          email: getEmail(data),
           updatedAt: new Date(),
+        },
+        create: {
+          clerkId: data.id,
+          email: getEmail(data),
         },
       });
     }
 
     if (type === "user.deleted") {
-      // Cascade deletes handle related records via Prisma schema
-      await db.user.delete({ where: { clerkId: data.id } }).catch(() => {
-        // User may not exist — ignore
-      });
+      await db.user.delete({
+        where: { clerkId: data.id },
+      }).catch(() => {});
     }
 
     return NextResponse.json({ success: true });
-  } catch (err) {
-    console.error("[Clerk webhook]", err);
+  } catch (error) {
+    console.error("[CLERK_WEBHOOK]", error);
     return NextResponse.json({ error: "Database error" }, { status: 500 });
   }
 }
